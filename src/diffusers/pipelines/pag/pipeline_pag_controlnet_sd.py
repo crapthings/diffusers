@@ -559,6 +559,7 @@ class StableDiffusionControlNetPAGPipeline(
         self,
         prompt,
         image,
+        controlnet_cond_alt,
         negative_prompt=None,
         prompt_embeds=None,
         negative_prompt_embeds=None,
@@ -863,6 +864,7 @@ class StableDiffusionControlNetPAGPipeline(
         self,
         prompt: Union[str, List[str]] = None,
         image: PipelineImageInput = None,
+        controlnet_cond_alt: PipelineImageInput = None,
         height: Optional[int] = None,
         width: Optional[int] = None,
         num_inference_steps: int = 50,
@@ -1023,6 +1025,7 @@ class StableDiffusionControlNetPAGPipeline(
         self.check_inputs(
             prompt,
             image,
+            controlnet_cond_alt,
             negative_prompt,
             prompt_embeds,
             negative_prompt_embeds,
@@ -1098,6 +1101,19 @@ class StableDiffusionControlNetPAGPipeline(
                 do_classifier_free_guidance=self.do_classifier_free_guidance,
                 guess_mode=guess_mode,
             )
+
+            controlnet_cond_alt = self.prepare_image(
+                image=controlnet_cond_alt,
+                width=width,
+                height=height,
+                batch_size=batch_size * num_images_per_prompt,
+                num_images_per_prompt=num_images_per_prompt,
+                device=device,
+                dtype=controlnet.dtype,
+                do_classifier_free_guidance=self.do_classifier_free_guidance,
+                guess_mode=guess_mode,
+            )
+          
             height, width = image.shape[-2:]
         elif isinstance(controlnet, MultiControlNetModel):
             images = []
@@ -1213,6 +1229,22 @@ class StableDiffusionControlNetPAGPipeline(
 
         image = images if isinstance(image, list) else images[0]
 
+        controlnet_cond_alts = controlnet_cond_alt if isinstance(controlnet_cond_alt, list) else [controlnet_cond_alt]
+        for i, single_controlnet_cond_alt in enumerate(controlnet_cond_alts):
+            if self.do_classifier_free_guidance:
+                single_controlnet_cond_alt = single_controlnet_cond_alt.chunk(2)[0]
+        
+            if self.do_perturbed_attention_guidance:
+                single_controlnet_cond_alt = self._prepare_perturbed_attention_guidance(
+                    single_controlnet_cond_alt, single_controlnet_cond_alt, self.do_classifier_free_guidance
+                )
+            elif self.do_classifier_free_guidance:
+                single_controlnet_cond_alt = torch.cat([single_controlnet_cond_alt] * 2)
+            single_controlnet_cond_alt = single_controlnet_cond_alt.to(device)
+            controlnet_cond_alts[i] = single_controlnet_cond_alt
+        
+        controlnet_cond_alt = controlnet_cond_alts if isinstance(controlnet_cond_alt, list) else controlnet_cond_alts[0]
+
         # 8. Denoising loop
         if self.do_perturbed_attention_guidance:
             original_attn_proc = self.unet.attn_processors
@@ -1250,6 +1282,7 @@ class StableDiffusionControlNetPAGPipeline(
                     t,
                     encoder_hidden_states=controlnet_prompt_embeds,
                     controlnet_cond=image,
+                    controlnet_cond_alt=controlnet_cond_alt,
                     conditioning_scale=cond_scale,
                     guess_mode=guess_mode,
                     return_dict=False,
