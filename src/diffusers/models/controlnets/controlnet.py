@@ -670,6 +670,8 @@ class ControlNetModel(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         encoder_hidden_states: torch.Tensor,
         controlnet_cond: torch.Tensor,
         controlnet_cond_alt: torch.Tensor,
+        control_alpha_scale: float = .5,
+        control_beta_scale: float = .9,
         conditioning_scale: float = 1.0,
         class_labels: Optional[torch.Tensor] = None,
         timestep_cond: Optional[torch.Tensor] = None,
@@ -803,8 +805,8 @@ class ControlNetModel(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         controlnet_cond = self.controlnet_cond_embedding(controlnet_cond)
         controlnet_cond_alt = self.controlnet_cond_embedding(controlnet_cond_alt)
 
-        alpha = 0.5  # 更强的形状控制
-        beta = 0.9   # 相对较弱的颜色控制
+        alpha = control_alpha_scale  # 更强的形状控制 0.5 
+        beta = control_beta_scale   # 相对较弱的颜色控制 0.9
         
         sample = sample + alpha * controlnet_cond + beta * controlnet_cond_alt
 
