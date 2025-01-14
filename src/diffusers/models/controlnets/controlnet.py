@@ -669,6 +669,7 @@ class ControlNetModel(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         timestep: Union[torch.Tensor, float, int],
         encoder_hidden_states: torch.Tensor,
         controlnet_cond: torch.Tensor,
+        controlnet_cond_alt: torch.Tensor,
         conditioning_scale: float = 1.0,
         class_labels: Optional[torch.Tensor] = None,
         timestep_cond: Optional[torch.Tensor] = None,
@@ -726,6 +727,7 @@ class ControlNetModel(ModelMixin, ConfigMixin, FromOriginalModelMixin):
             ...
         elif channel_order == "bgr":
             controlnet_cond = torch.flip(controlnet_cond, dims=[1])
+            controlnet_cond_alt = torch.flip(controlnet_cond_alt, dims=[1])
         else:
             raise ValueError(f"unknown `controlnet_conditioning_channel_order`: {channel_order}")
 
@@ -799,7 +801,12 @@ class ControlNetModel(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         sample = self.conv_in(sample)
 
         controlnet_cond = self.controlnet_cond_embedding(controlnet_cond)
-        sample = sample + controlnet_cond
+        controlnet_cond_alt = self.controlnet_cond_embedding(controlnet_cond_alt)
+
+        alpha = 0.5  # 更强的形状控制
+        beta = 0.9   # 相对较弱的颜色控制
+        
+        sample = sample + alpha * controlnet_cond + beta * controlnet_cond_alt
 
         # 3. down
         down_block_res_samples = (sample,)
