@@ -493,6 +493,14 @@ def parse_args(input_args=None):
         default="conditioning_image",
         help="The column of the dataset containing the controlnet conditioning image.",
     )
+
+    parser.add_argument(
+        "--conditioning_image_alt_column",
+        type=str,
+        default="conditioning_image_alt",
+        help="The column of the dataset containing the alternative controlnet conditioning image.",
+    )
+  
     parser.add_argument(
         "--caption_column",
         type=str,
@@ -658,6 +666,20 @@ def make_train_dataset(args, tokenizer, accelerator):
                 f"`--conditioning_image_column` value '{args.conditioning_image_column}' not found in dataset columns. Dataset columns are: {', '.join(column_names)}"
             )
 
+    if args.conditioning_image_alt_column is None:
+        if len(column_names) > 3:
+            conditioning_image_alt_column = column_names[3]
+            logger.info(f"conditioning image alt column defaulting to {conditioning_image_alt_column}")
+        else:
+            conditioning_image_alt_column = None
+            logger.info("No conditioning image alt column found in dataset")
+    else:
+        conditioning_image_alt_column = args.conditioning_image_alt_column
+        if conditioning_image_alt_column not in column_names:
+            raise ValueError(
+                f"`--conditioning_image_alt_column` value '{args.conditioning_image_alt_column}' not found in dataset columns. Dataset columns are: {', '.join(column_names)}"
+            )
+  
     def tokenize_captions(examples, is_train=True):
         captions = []
         for caption in examples[caption_column]:
@@ -701,8 +723,12 @@ def make_train_dataset(args, tokenizer, accelerator):
         conditioning_images = [image.convert("RGB") for image in examples[conditioning_image_column]]
         conditioning_images = [conditioning_image_transforms(image) for image in conditioning_images]
 
+        conditioning_images_alt = [image.convert("RGB") for image in examples[conditioning_image_alt_column]]
+        conditioning_images_alt = [conditioning_image_transforms(image) for image in conditioning_images_alt]
+
         examples["pixel_values"] = images
         examples["conditioning_pixel_values"] = conditioning_images
+        examples["conditioning_pixel_values_alt"] = conditioning_images_alt
         examples["input_ids"] = tokenize_captions(examples)
 
         return examples
@@ -723,11 +749,15 @@ def collate_fn(examples):
     conditioning_pixel_values = torch.stack([example["conditioning_pixel_values"] for example in examples])
     conditioning_pixel_values = conditioning_pixel_values.to(memory_format=torch.contiguous_format).float()
 
+    conditioning_pixel_values_alt = torch.stack([example["conditioning_pixel_values_alt"] for example in examples])
+    conditioning_pixel_values_alt = conditioning_pixel_values_alt.to(memory_format=torch.contiguous_format).float()
+
     input_ids = torch.stack([example["input_ids"] for example in examples])
 
     return {
         "pixel_values": pixel_values,
         "conditioning_pixel_values": conditioning_pixel_values,
+        "conditioning_pixel_values_alt": conditioning_pixel_values_alt,
         "input_ids": input_ids,
     }
 
@@ -798,12 +828,16 @@ def main(args):
 
     # Load scheduler and models
     noise_scheduler = DDPMScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler")
+  
     text_encoder = text_encoder_cls.from_pretrained(
         args.pretrained_model_name_or_path, subfolder="text_encoder", revision=args.revision, variant=args.variant
     )
-    vae = AutoencoderKL.from_pretrained(
-        args.pretrained_model_name_or_path, subfolder="vae", revision=args.revision, variant=args.variant
-    )
+    # vae = AutoencoderKL.from_pretrained(
+    #     args.pretrained_model_name_or_path, subfolder="vae", revision=args.revision, variant=args.variant
+    # )
+
+    vae = AutoencoderKL.from_pretrained('stabilityai/sd-vae-ft-mse')
+
     unet = UNet2DConditionModel.from_pretrained(
         args.pretrained_model_name_or_path, subfolder="unet", revision=args.revision, variant=args.variant
     )
@@ -1055,11 +1089,14 @@ def main(args):
 
                 controlnet_image = batch["conditioning_pixel_values"].to(dtype=weight_dtype)
 
+                controlnet_image_alt = batch["conditioning_pixel_values_alt"].to(dtype=weight_dtype)
+
                 down_block_res_samples, mid_block_res_sample = controlnet(
                     noisy_latents,
                     timesteps,
                     encoder_hidden_states=encoder_hidden_states,
                     controlnet_cond=controlnet_image,
+                    # controlnet_cond_alt=controlnet_image_alt,
                     return_dict=False,
                 )
 
