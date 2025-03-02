@@ -521,6 +521,12 @@ def parse_args(input_args=None):
         help="The column of the dataset containing the controlnet conditioning image.",
     )
     parser.add_argument(
+        "--conditioning_image_alt_column",
+        type=str,
+        default="conditioning_image_alt",
+        help="The column of the dataset containing the alternative controlnet conditioning image.",
+    )
+    parser.add_argument(
         "--caption_column",
         type=str,
         default="text",
@@ -685,6 +691,20 @@ def get_train_dataset(args, accelerator):
                 f"`--conditioning_image_column` value '{args.conditioning_image_column}' not found in dataset columns. Dataset columns are: {', '.join(column_names)}"
             )
 
+    if args.conditioning_image_alt_column is None:
+        if len(column_names) > 3:
+            conditioning_image_alt_column = column_names[3]
+            logger.info(f"conditioning image alt column defaulting to {conditioning_image_alt_column}")
+        else:
+            conditioning_image_alt_column = None
+            logger.info("No conditioning image alt column found in dataset")
+    else:
+        conditioning_image_alt_column = args.conditioning_image_alt_column
+        if conditioning_image_alt_column not in column_names:
+            raise ValueError(
+                f"`--conditioning_image_alt_column` value '{args.conditioning_image_alt_column}' not found in dataset columns. Dataset columns are: {', '.join(column_names)}"
+            )
+
     with accelerator.main_process_first():
         train_dataset = dataset["train"].shuffle(seed=args.seed)
         if args.max_train_samples is not None:
@@ -758,8 +778,12 @@ def prepare_train_dataset(dataset, accelerator):
         conditioning_images = [image.convert("RGB") for image in examples[args.conditioning_image_column]]
         conditioning_images = [conditioning_image_transforms(image) for image in conditioning_images]
 
+        conditioning_images_alt = [image.convert("RGB") for image in examples[args.conditioning_image_alt_column]]
+        conditioning_images_alt = [conditioning_image_transforms(image) for image in conditioning_images_alt]
+
         examples["pixel_values"] = images
         examples["conditioning_pixel_values"] = conditioning_images
+        examples["conditioning_pixel_values_alt"] = conditioning_images_alt
 
         return examples
 
@@ -776,6 +800,9 @@ def collate_fn(examples):
     conditioning_pixel_values = torch.stack([example["conditioning_pixel_values"] for example in examples])
     conditioning_pixel_values = conditioning_pixel_values.to(memory_format=torch.contiguous_format).float()
 
+    conditioning_pixel_values_alt = torch.stack([example["conditioning_pixel_values_alt"] for example in examples])
+    conditioning_pixel_values_alt = conditioning_pixel_values_alt.to(memory_format=torch.contiguous_format).float()
+
     prompt_ids = torch.stack([torch.tensor(example["prompt_embeds"]) for example in examples])
 
     add_text_embeds = torch.stack([torch.tensor(example["text_embeds"]) for example in examples])
@@ -784,12 +811,14 @@ def collate_fn(examples):
     return {
         "pixel_values": pixel_values,
         "conditioning_pixel_values": conditioning_pixel_values,
+        "conditioning_pixel_values_alt": conditioning_pixel_values_alt,
         "prompt_ids": prompt_ids,
         "unet_added_conditions": {"text_embeds": add_text_embeds, "time_ids": add_time_ids},
     }
 
 
 def main(args):
+    # global args  # Ensure args is accessible in nested functions
     if args.report_to == "wandb" and args.hub_token is not None:
         raise ValueError(
             "You cannot use both --report_to=wandb and --hub_token due to a security risk of exposing your token."
@@ -1214,12 +1243,14 @@ def main(args):
 
                 # ControlNet conditioning.
                 controlnet_image = batch["conditioning_pixel_values"].to(dtype=weight_dtype)
+                controlnet_image_alt = batch["conditioning_pixel_values_alt"].to(dtype=weight_dtype)
                 down_block_res_samples, mid_block_res_sample = controlnet(
                     noisy_latents,
                     timesteps,
                     encoder_hidden_states=batch["prompt_ids"],
                     added_cond_kwargs=batch["unet_added_conditions"],
                     controlnet_cond=controlnet_image,
+                    controlnet_cond_alt=controlnet_image_alt,
                     return_dict=False,
                 )
 
