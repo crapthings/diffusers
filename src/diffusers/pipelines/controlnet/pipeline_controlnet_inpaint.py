@@ -995,6 +995,7 @@ class StableDiffusionControlNetInpaintPipeline(
         image: PipelineImageInput = None,
         mask_image: PipelineImageInput = None,
         control_image: PipelineImageInput = None,
+        control_image_alt: PipelineImageInput = None,  # 新增第二个控制条件
         height: Optional[int] = None,
         width: Optional[int] = None,
         padding_mask_crop: Optional[int] = None,
@@ -1053,6 +1054,9 @@ class StableDiffusionControlNetInpaintPipeline(
                 width are passed, `image` is resized accordingly. If multiple ControlNets are specified in `init`,
                 images must be passed as a list such that each element of the list can be correctly batched for input
                 to a single ControlNet.
+            control_image_alt (`torch.Tensor`, `PIL.Image.Image`, `List[torch.Tensor]`, `List[PIL.Image.Image]`,
+                    `List[List[torch.Tensor]]`, or `List[List[PIL.Image.Image]]`):
+                第二个ControlNet输入条件，与control_image提供的逻辑相同。
             height (`int`, *optional*, defaults to `self.unet.config.sample_size * self.vae_scale_factor`):
                 The height in pixels of the generated image.
             width (`int`, *optional*, defaults to `self.unet.config.sample_size * self.vae_scale_factor`):
@@ -1277,6 +1281,22 @@ class StableDiffusionControlNetInpaintPipeline(
                 do_classifier_free_guidance=self.do_classifier_free_guidance,
                 guess_mode=guess_mode,
             )
+            
+            # 准备第二个条件输入
+            if control_image_alt is not None:
+                control_image_alt = self.prepare_control_image(
+                    image=control_image_alt,
+                    width=width,
+                    height=height,
+                    batch_size=batch_size * num_images_per_prompt,
+                    num_images_per_prompt=num_images_per_prompt,
+                    device=device,
+                    dtype=controlnet.dtype,
+                    crops_coords=crops_coords,
+                    resize_mode=resize_mode,
+                    do_classifier_free_guidance=self.do_classifier_free_guidance,
+                    guess_mode=guess_mode,
+                )
         elif isinstance(controlnet, MultiControlNetModel):
             control_images = []
 
@@ -1298,6 +1318,29 @@ class StableDiffusionControlNetInpaintPipeline(
                 control_images.append(control_image_)
 
             control_image = control_images
+            
+            # 为MultiControlNetModel准备第二个条件列表
+            if control_image_alt is not None:
+                control_images_alt = []
+                
+                for control_image_alt_ in control_image_alt:
+                    control_image_alt_ = self.prepare_control_image(
+                        image=control_image_alt_,
+                        width=width,
+                        height=height,
+                        batch_size=batch_size * num_images_per_prompt,
+                        num_images_per_prompt=num_images_per_prompt,
+                        device=device,
+                        dtype=controlnet.dtype,
+                        crops_coords=crops_coords,
+                        resize_mode=resize_mode,
+                        do_classifier_free_guidance=self.do_classifier_free_guidance,
+                        guess_mode=guess_mode,
+                    )
+                    
+                    control_images_alt.append(control_image_alt_)
+                    
+                control_image_alt = control_images_alt
         else:
             assert False
 
@@ -1417,6 +1460,7 @@ class StableDiffusionControlNetInpaintPipeline(
                     t,
                     encoder_hidden_states=controlnet_prompt_embeds,
                     controlnet_cond=control_image,
+                    controlnet_cond_alt=control_image_alt,  # 添加第二个控制条件
                     conditioning_scale=cond_scale,
                     guess_mode=guess_mode,
                     return_dict=False,
